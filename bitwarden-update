@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+OUTPUT="/dev/null"
+TMPDIR="/tmp/tmp-bitwarden"
+
+while getopts "v" OPTION; do
+    case "$OPTION" in
+    v)
+        OUTPUT="/dev/stdout"
+        ;;
+    \?)
+        exit 10
+        ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+if ! [[ $EUID -eq 0 ]]; then
+    echo "This script needs root privileges."
+    exit 1
+fi
+
+ONLINE_VERSION=$(curl -s "https://api.github.com/repos/bitwarden/clients/releases?per_page=20" | jq -r 'first(.[].tag_name|select(startswith("desktop"))|select(contains("beta")|not)|ltrimstr("desktop-v"))')
+if ! dpkg -s bitwarden >/dev/null 2>&1; then
+    echo "Bitwarden is not installed. Proceeding with the initial installation."
+    LOCAL_VERSION="0"
+else
+    LOCAL_VERSION=$(dpkg -s bitwarden | grep '^Version:' | sed 's/^Version: //')
+fi
+
+if dpkg --compare-versions "${LOCAL_VERSION}" = "${ONLINE_VERSION}"; then
+	echo "You already have the latest version."
+	exit 0
+fi
+
+if ! curl -Is --connect-timeout 5 "https://github.com" > "${OUTPUT}" ; then
+    echo "Impossible to establish a connection with GitHub. Please check your internet connection."
+    exit 2
+fi
+
+if ! [[ -d ${TMPDIR} ]]; then
+    echo "Creation of temporary directory."
+    mkdir -vp "${TMPDIR}" > "${OUTPUT}" 
+elif [[ $(ls -A "${TMPDIR}") ]]; then
+    echo "Temporary directory not empty, removing old files."
+    rm -frv "${TMPDIR:?}"/* > "${OUTPUT}" 
+else
+    echo "Temporary directory already exists and is empty."
+fi
+
+echo "Attempting installation."
+if ! curl -fsSL "https://bitwarden.com/download/?app=desktop&platform=linux&variant=deb" -o "${TMPDIR}/bitwarden.deb" > "${OUTPUT}" ; then
+    echo "Impossible to download the latest Bitwarden deb file. Please check for a potential URL change or contact julescramelle@proton.me."
+    exit 3
+fi
+
+if dpkg -i "${TMPDIR}/bitwarden.deb" > "${OUTPUT}" ; then
+    echo "Successfully installed Bitwarden."
+    exit 0
+else
+    ERROR_CODE="$?"
+    echo "Failed to install Bitwarden (exit code ${ERROR_CODE})."
+    exit "${ERROR_CODE}"
+fi
